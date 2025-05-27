@@ -274,10 +274,6 @@
         let currentTarget = null;
         let gameObjects = {};
         let isLoading = true;
-        let chunks = new Map();
-        let chunkSize = 50;
-        let renderDistance = 2; // chunks to load around player
-        let lastPlayerChunk = { x: 0, z: 0 };
 
         // Initialize game
         async function init() {
@@ -298,20 +294,39 @@
 
         // Asset management
         async function loadOrGenerateAssets() {
-            addChatMessage("Generating game assets...", "system");
+            addChatMessage("Loading game assets from database...", "system");
             
-            // Check if assets exist in database
-            const existingAssets = room.collection('game_asset').getList();
-            
-            if (existingAssets.length === 0) {
-                // Generate new assets
-                await generateGameAssets();
-            } else {
-                // Load existing assets
-                for (const asset of existingAssets) {
-                    gameAssets[asset.name] = asset.url;
-                }
-            }
+            return new Promise((resolve) => {
+                // Subscribe to assets and wait for them to load
+                const unsubscribe = room.collection('game_asset').subscribe(async (assets) => {
+                    if (assets.length > 0) {
+                        // Load existing assets
+                        for (const asset of assets) {
+                            gameAssets[asset.name] = asset.url;
+                        }
+                        addChatMessage(`Loaded ${assets.length} existing assets from database.`, "system");
+                        unsubscribe();
+                        resolve();
+                    } else {
+                        // Check if we've waited long enough for the database to load
+                        setTimeout(async () => {
+                            const currentAssets = room.collection('game_asset').getList();
+                            if (currentAssets.length === 0) {
+                                addChatMessage("No assets found, generating new ones...", "system");
+                                await generateGameAssets();
+                            } else {
+                                // Assets loaded in the meantime
+                                for (const asset of currentAssets) {
+                                    gameAssets[asset.name] = asset.url;
+                                }
+                                addChatMessage(`Loaded ${currentAssets.length} assets from database.`, "system");
+                            }
+                            unsubscribe();
+                            resolve();
+                        }, 1000); // Wait 1 second for database to load
+                    }
+                });
+            });
         }
 
         async function generateGameAssets() {
@@ -326,8 +341,11 @@
                 { name: 'water', prompt: 'Blue water surface with gentle ripples, 2D paper mario style', transparent: false }
             ];
 
+            addChatMessage(`Generating ${assetsToGenerate.length} new game assets...`, "system");
+
             for (const asset of assetsToGenerate) {
                 try {
+                    addChatMessage(`Generating ${asset.name}...`, "system");
                     const result = await websim.imageGen({
                         prompt: asset.prompt,
                         transparent: asset.transparent,
@@ -342,8 +360,13 @@
                         url: result.url,
                         prompt: asset.prompt
                     });
+                    
+                    addChatMessage(`Generated ${asset.name} successfully.`, "system");
                 } catch (error) {
                     console.error(`Failed to generate ${asset.name}:`, error);
+                    addChatMessage(`Failed to generate ${asset.name}: ${error.message}`, "system");
+                    // Create a fallback colored square
+                    gameAssets[asset.name] = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
                 }
             }
         }
@@ -370,12 +393,34 @@
             directionalLight.castShadow = true;
             scene.add(directionalLight);
             
-            // Remove static ground - will be replaced with chunks
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(100, 100);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
         }
 
         function setupPlayer() {
-            // Create player sprite
-            const playerTexture = new THREE.TextureLoader().load(gameAssets.player || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+            // Create player sprite with better fallback
+            const playerTexture = new THREE.TextureLoader().load(
+                gameAssets.player || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+                undefined, // onLoad
+                undefined, // onProgress
+                (error) => {
+                    console.error('Failed to load player texture:', error);
+                    // Use a colored fallback
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 64;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#4a9eff';
+                    ctx.fillRect(0, 0, 64, 64);
+                    const fallbackTexture = new THREE.CanvasTexture(canvas);
+                    player.material.map = fallbackTexture;
+                    player.material.needsUpdate = true;
+                }
+            );
             const playerMaterial = new THREE.SpriteMaterial({ map: playerTexture });
             player = new THREE.Sprite(playerMaterial);
             player.scale.set(2, 2, 1);
@@ -393,172 +438,81 @@
         }
 
         function populateWorld() {
-            // Initialize chunk system
-            updateChunks();
-        }
-
-        function getChunkKey(x, z) {
-            return `${x},${z}`;
-        }
-
-        function getChunkCoords(worldX, worldZ) {
-            return {
-                x: Math.floor(worldX / chunkSize),
-                z: Math.floor(worldZ / chunkSize)
-            };
-        }
-
-        function generateChunk(chunkX, chunkZ) {
-            const chunkKey = getChunkKey(chunkX, chunkZ);
-            if (chunks.has(chunkKey)) return;
-
-            const chunk = {
-                x: chunkX,
-                z: chunkZ,
-                objects: [],
-                terrain: null
-            };
-
-            // Create terrain for this chunk
-            const groundGeometry = new THREE.PlaneGeometry(chunkSize, chunkSize);
-            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
-            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-            ground.rotation.x = -Math.PI / 2;
-            ground.position.set(chunkX * chunkSize, 0, chunkZ * chunkSize);
-            ground.receiveShadow = true;
-            scene.add(ground);
-            chunk.terrain = ground;
-
-            // Seed for consistent generation
-            const seed = (chunkX * 1000 + chunkZ) * 12345;
-            const rng = new SeededRandom(seed);
-
-            // Generate objects in this chunk
-            const chunkStartX = chunkX * chunkSize - chunkSize / 2;
-            const chunkStartZ = chunkZ * chunkSize - chunkSize / 2;
-
-            // Mining rocks
-            const rockCount = 8 + Math.floor(rng.random() * 5);
-            for (let i = 0; i < rockCount; i++) {
-                const obj = addGameObject('rock',
-                    chunkStartX + rng.random() * chunkSize,
-                    0,
-                    chunkStartZ + rng.random() * chunkSize,
+            // Add mining rocks
+            for (let i = 0; i < 10; i++) {
+                addGameObject('rock', 
+                    Math.random() * 40 - 20, 
+                    0, 
+                    Math.random() * 40 - 20,
                     { type: 'mining', resource: 'copper_ore', amount: 1 }
                 );
-                chunk.objects.push(obj);
             }
-
-            // Trees
-            const treeCount = 10 + Math.floor(rng.random() * 8);
-            for (let i = 0; i < treeCount; i++) {
-                const obj = addGameObject('tree',
-                    chunkStartX + rng.random() * chunkSize,
+            
+            // Add trees
+            for (let i = 0; i < 15; i++) {
+                addGameObject('tree',
+                    Math.random() * 50 - 25,
                     0,
-                    chunkStartZ + rng.random() * chunkSize,
+                    Math.random() * 50 - 25,
                     { type: 'decoration' }
                 );
-                chunk.objects.push(obj);
             }
-
-            // Fishing spots
-            const waterCount = 3 + Math.floor(rng.random() * 3);
-            for (let i = 0; i < waterCount; i++) {
-                const obj = addGameObject('water',
-                    chunkStartX + rng.random() * chunkSize,
+            
+            // Add fishing spots
+            for (let i = 0; i < 5; i++) {
+                addGameObject('water',
+                    Math.random() * 30 - 15,
                     0,
-                    chunkStartZ + rng.random() * chunkSize,
+                    Math.random() * 30 - 15,
                     { type: 'fishing', resource: 'fish', amount: 1 }
                 );
-                chunk.objects.push(obj);
             }
-
-            // Goblins
-            const goblinCount = 4 + Math.floor(rng.random() * 4);
-            for (let i = 0; i < goblinCount; i++) {
-                const obj = addGameObject('goblin',
-                    chunkStartX + rng.random() * chunkSize,
+            
+            // Add some goblins
+            for (let i = 0; i < 8; i++) {
+                addGameObject('goblin',
+                    Math.random() * 35 - 17.5,
                     0,
-                    chunkStartZ + rng.random() * chunkSize,
+                    Math.random() * 35 - 17.5,
                     { type: 'combat', health: 10, exp: 25 }
                 );
-                chunk.objects.push(obj);
-            }
-
-            chunks.set(chunkKey, chunk);
-        }
-
-        function unloadChunk(chunkX, chunkZ) {
-            const chunkKey = getChunkKey(chunkX, chunkZ);
-            const chunk = chunks.get(chunkKey);
-            if (!chunk) return;
-
-            // Remove terrain
-            if (chunk.terrain) {
-                scene.remove(chunk.terrain);
-                chunk.terrain.geometry.dispose();
-                chunk.terrain.material.dispose();
-            }
-
-            // Remove objects
-            chunk.objects.forEach(obj => {
-                scene.remove(obj);
-                delete gameObjects[obj.userData.id];
-            });
-
-            chunks.delete(chunkKey);
-        }
-
-        function updateChunks() {
-            const playerChunk = getChunkCoords(player.position.x, player.position.z);
-
-            // Only update if player moved to a different chunk
-            if (playerChunk.x === lastPlayerChunk.x && playerChunk.z === lastPlayerChunk.z) {
-                return;
-            }
-
-            lastPlayerChunk = playerChunk;
-
-            // Load chunks around player
-            const chunksToLoad = new Set();
-            for (let x = playerChunk.x - renderDistance; x <= playerChunk.x + renderDistance; x++) {
-                for (let z = playerChunk.z - renderDistance; z <= playerChunk.z + renderDistance; z++) {
-                    chunksToLoad.add(getChunkKey(x, z));
-                    generateChunk(x, z);
-                }
-            }
-
-            // Unload distant chunks
-            const chunksToUnload = [];
-            chunks.forEach((chunk, key) => {
-                const distance = Math.max(
-                    Math.abs(chunk.x - playerChunk.x),
-                    Math.abs(chunk.z - playerChunk.z)
-                );
-                if (distance > renderDistance + 1) {
-                    chunksToUnload.push({ x: chunk.x, z: chunk.z });
-                }
-            });
-
-            chunksToUnload.forEach(chunk => {
-                unloadChunk(chunk.x, chunk.z);
-            });
-        }
-
-        // Seeded random number generator for consistent chunk generation
-        class SeededRandom {
-            constructor(seed) {
-                this.seed = seed;
-            }
-
-            random() {
-                this.seed = (this.seed * 9301 + 49297) % 233280;
-                return this.seed / 233280;
             }
         }
 
         function addGameObject(type, x, y, z, properties = {}) {
-            const texture = new THREE.TextureLoader().load(gameAssets[type] || gameAssets.player);
+            const textureUrl = gameAssets[type] || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+            
+            const texture = new THREE.TextureLoader().load(
+                textureUrl,
+                undefined, // onLoad
+                undefined, // onProgress
+                (error) => {
+                    console.error(`Failed to load texture for ${type}:`, error);
+                    // Create a colored fallback based on type
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 64;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Different colors for different types
+                    const colors = {
+                        'rock': '#888888',
+                        'tree': '#228B22',
+                        'water': '#4169E1',
+                        'goblin': '#32CD32',
+                        'copper_ore': '#CD853F',
+                        'iron_ore': '#708090',
+                        'fish': '#C0C0C0'
+                    };
+                    
+                    ctx.fillStyle = colors[type] || '#666666';
+                    ctx.fillRect(0, 0, 64, 64);
+                    
+                    const fallbackTexture = new THREE.CanvasTexture(canvas);
+                    sprite.material.map = fallbackTexture;
+                    sprite.material.needsUpdate = true;
+                }
+            );
+            
             const material = new THREE.SpriteMaterial({ map: texture });
             const sprite = new THREE.Sprite(material);
             
@@ -710,37 +664,18 @@
             
             addChatMessage(`You mined ${properties.resource}! +${expGain} Mining XP`, "system");
             
-            // Remove from scene and objects
+            // Remove or respawn object
             scene.remove(obj);
             delete gameObjects[obj.userData.id];
-
-            // Remove from chunk
-            chunks.forEach(chunk => {
-                const index = chunk.objects.indexOf(obj);
-                if (index > -1) {
-                    chunk.objects.splice(index, 1);
-                }
-            });
             
-            // Respawn after delay in same general area
+            // Respawn after delay
             setTimeout(() => {
-                const chunkCoords = getChunkCoords(obj.position.x, obj.position.z);
-                const chunkStartX = chunkCoords.x * chunkSize - chunkSize / 2;
-                const chunkStartZ = chunkCoords.z * chunkSize - chunkSize / 2;
-                
-                const newObj = addGameObject('rock', 
-                    chunkStartX + Math.random() * chunkSize,
+                addGameObject('rock', 
+                    Math.random() * 40 - 20, 
                     0, 
-                    chunkStartZ + Math.random() * chunkSize,
+                    Math.random() * 40 - 20,
                     { type: 'mining', resource: 'copper_ore', amount: 1 }
                 );
-
-                // Add to appropriate chunk
-                const chunkKey = getChunkKey(chunkCoords.x, chunkCoords.z);
-                const chunk = chunks.get(chunkKey);
-                if (chunk) {
-                    chunk.objects.push(newObj);
-                }
             }, 5000);
             
             updateUI();
@@ -765,37 +700,18 @@
             
             addChatMessage(`You defeated the goblin! +${expGain} Combat XP`, "system");
             
-            // Remove from scene and objects
+            // Remove goblin
             scene.remove(obj);
             delete gameObjects[obj.userData.id];
-
-            // Remove from chunk
-            chunks.forEach(chunk => {
-                const index = chunk.objects.indexOf(obj);
-                if (index > -1) {
-                    chunk.objects.splice(index, 1);
-                }
-            });
             
-            // Respawn after delay in same general area
+            // Respawn after delay
             setTimeout(() => {
-                const chunkCoords = getChunkCoords(obj.position.x, obj.position.z);
-                const chunkStartX = chunkCoords.x * chunkSize - chunkSize / 2;
-                const chunkStartZ = chunkCoords.z * chunkSize - chunkSize / 2;
-                
-                const newObj = addGameObject('goblin',
-                    chunkStartX + Math.random() * chunkSize,
+                addGameObject('goblin',
+                    Math.random() * 35 - 17.5,
                     0,
-                    chunkStartZ + Math.random() * chunkSize,
+                    Math.random() * 35 - 17.5,
                     { type: 'combat', health: 10, exp: 25 }
                 );
-
-                // Add to appropriate chunk
-                const chunkKey = getChunkKey(chunkCoords.x, chunkCoords.z);
-                const chunk = chunks.get(chunkKey);
-                if (chunk) {
-                    chunk.objects.push(newObj);
-                }
             }, 10000);
             
             updateUI();
@@ -1011,20 +927,35 @@
         // Render other players
         room.subscribePresence((presence) => {
             Object.keys(presence).forEach(clientId => {
-                if (clientId !== room.clientId && presence[clientId]) {
+                if (clientId !== room.clientId) {
                     renderOtherPlayer(clientId, presence[clientId]);
                 }
             });
         });
 
         function renderOtherPlayer(clientId, playerData) {
-            if (!playerData) return;
-            
             let otherPlayer = scene.getObjectByName(`player_${clientId}`);
             
             if (!otherPlayer && playerData.x !== undefined) {
-                // Create new player sprite
-                const texture = new THREE.TextureLoader().load(gameAssets.player);
+                // Create new player sprite with better error handling
+                const textureUrl = gameAssets.player || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+                const texture = new THREE.TextureLoader().load(
+                    textureUrl,
+                    undefined, // onLoad
+                    undefined, // onProgress
+                    (error) => {
+                        console.error(`Failed to load other player texture:`, error);
+                        // Use a colored fallback for other players
+                        const canvas = document.createElement('canvas');
+                        canvas.width = canvas.height = 64;
+                        const ctx = canvas.getContext('2d');
+                        ctx.fillStyle = '#ff6b6b'; // Different color for other players
+                        ctx.fillRect(0, 0, 64, 64);
+                        const fallbackTexture = new THREE.CanvasTexture(canvas);
+                        otherPlayer.material.map = fallbackTexture;
+                        otherPlayer.material.needsUpdate = true;
+                    }
+                );
                 const material = new THREE.SpriteMaterial({ map: texture });
                 otherPlayer = new THREE.Sprite(material);
                 otherPlayer.scale.set(2, 2, 1);
@@ -1041,7 +972,6 @@
         function gameLoop() {
             if (!isLoading) {
                 handleMovement();
-                updateChunks(); // Add chunk updating to game loop
                 renderer.render(scene, camera);
             }
             requestAnimationFrame(gameLoop);
