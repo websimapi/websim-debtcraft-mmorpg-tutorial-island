@@ -274,6 +274,10 @@
         let currentTarget = null;
         let gameObjects = {};
         let isLoading = true;
+        let chunks = new Map();
+        let chunkSize = 50;
+        let renderDistance = 2; // chunks to load around player
+        let lastPlayerChunk = { x: 0, z: 0 };
 
         // Initialize game
         async function init() {
@@ -366,13 +370,7 @@
             directionalLight.castShadow = true;
             scene.add(directionalLight);
             
-            // Ground
-            const groundGeometry = new THREE.PlaneGeometry(100, 100);
-            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
-            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-            ground.rotation.x = -Math.PI / 2;
-            ground.receiveShadow = true;
-            scene.add(ground);
+            // Remove static ground - will be replaced with chunks
         }
 
         function setupPlayer() {
@@ -395,44 +393,167 @@
         }
 
         function populateWorld() {
-            // Add mining rocks
-            for (let i = 0; i < 10; i++) {
-                addGameObject('rock', 
-                    Math.random() * 40 - 20, 
-                    0, 
-                    Math.random() * 40 - 20,
+            // Initialize chunk system
+            updateChunks();
+        }
+
+        function getChunkKey(x, z) {
+            return `${x},${z}`;
+        }
+
+        function getChunkCoords(worldX, worldZ) {
+            return {
+                x: Math.floor(worldX / chunkSize),
+                z: Math.floor(worldZ / chunkSize)
+            };
+        }
+
+        function generateChunk(chunkX, chunkZ) {
+            const chunkKey = getChunkKey(chunkX, chunkZ);
+            if (chunks.has(chunkKey)) return;
+
+            const chunk = {
+                x: chunkX,
+                z: chunkZ,
+                objects: [],
+                terrain: null
+            };
+
+            // Create terrain for this chunk
+            const groundGeometry = new THREE.PlaneGeometry(chunkSize, chunkSize);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.set(chunkX * chunkSize, 0, chunkZ * chunkSize);
+            ground.receiveShadow = true;
+            scene.add(ground);
+            chunk.terrain = ground;
+
+            // Seed for consistent generation
+            const seed = (chunkX * 1000 + chunkZ) * 12345;
+            const rng = new SeededRandom(seed);
+
+            // Generate objects in this chunk
+            const chunkStartX = chunkX * chunkSize - chunkSize / 2;
+            const chunkStartZ = chunkZ * chunkSize - chunkSize / 2;
+
+            // Mining rocks
+            const rockCount = 8 + Math.floor(rng.random() * 5);
+            for (let i = 0; i < rockCount; i++) {
+                const obj = addGameObject('rock',
+                    chunkStartX + rng.random() * chunkSize,
+                    0,
+                    chunkStartZ + rng.random() * chunkSize,
                     { type: 'mining', resource: 'copper_ore', amount: 1 }
                 );
+                chunk.objects.push(obj);
             }
-            
-            // Add trees
-            for (let i = 0; i < 15; i++) {
-                addGameObject('tree',
-                    Math.random() * 50 - 25,
+
+            // Trees
+            const treeCount = 10 + Math.floor(rng.random() * 8);
+            for (let i = 0; i < treeCount; i++) {
+                const obj = addGameObject('tree',
+                    chunkStartX + rng.random() * chunkSize,
                     0,
-                    Math.random() * 50 - 25,
+                    chunkStartZ + rng.random() * chunkSize,
                     { type: 'decoration' }
                 );
+                chunk.objects.push(obj);
             }
-            
-            // Add fishing spots
-            for (let i = 0; i < 5; i++) {
-                addGameObject('water',
-                    Math.random() * 30 - 15,
+
+            // Fishing spots
+            const waterCount = 3 + Math.floor(rng.random() * 3);
+            for (let i = 0; i < waterCount; i++) {
+                const obj = addGameObject('water',
+                    chunkStartX + rng.random() * chunkSize,
                     0,
-                    Math.random() * 30 - 15,
+                    chunkStartZ + rng.random() * chunkSize,
                     { type: 'fishing', resource: 'fish', amount: 1 }
                 );
+                chunk.objects.push(obj);
             }
-            
-            // Add some goblins
-            for (let i = 0; i < 8; i++) {
-                addGameObject('goblin',
-                    Math.random() * 35 - 17.5,
+
+            // Goblins
+            const goblinCount = 4 + Math.floor(rng.random() * 4);
+            for (let i = 0; i < goblinCount; i++) {
+                const obj = addGameObject('goblin',
+                    chunkStartX + rng.random() * chunkSize,
                     0,
-                    Math.random() * 35 - 17.5,
+                    chunkStartZ + rng.random() * chunkSize,
                     { type: 'combat', health: 10, exp: 25 }
                 );
+                chunk.objects.push(obj);
+            }
+
+            chunks.set(chunkKey, chunk);
+        }
+
+        function unloadChunk(chunkX, chunkZ) {
+            const chunkKey = getChunkKey(chunkX, chunkZ);
+            const chunk = chunks.get(chunkKey);
+            if (!chunk) return;
+
+            // Remove terrain
+            if (chunk.terrain) {
+                scene.remove(chunk.terrain);
+                chunk.terrain.geometry.dispose();
+                chunk.terrain.material.dispose();
+            }
+
+            // Remove objects
+            chunk.objects.forEach(obj => {
+                scene.remove(obj);
+                delete gameObjects[obj.userData.id];
+            });
+
+            chunks.delete(chunkKey);
+        }
+
+        function updateChunks() {
+            const playerChunk = getChunkCoords(player.position.x, player.position.z);
+
+            // Only update if player moved to a different chunk
+            if (playerChunk.x === lastPlayerChunk.x && playerChunk.z === lastPlayerChunk.z) {
+                return;
+            }
+
+            lastPlayerChunk = playerChunk;
+
+            // Load chunks around player
+            const chunksToLoad = new Set();
+            for (let x = playerChunk.x - renderDistance; x <= playerChunk.x + renderDistance; x++) {
+                for (let z = playerChunk.z - renderDistance; z <= playerChunk.z + renderDistance; z++) {
+                    chunksToLoad.add(getChunkKey(x, z));
+                    generateChunk(x, z);
+                }
+            }
+
+            // Unload distant chunks
+            const chunksToUnload = [];
+            chunks.forEach((chunk, key) => {
+                const distance = Math.max(
+                    Math.abs(chunk.x - playerChunk.x),
+                    Math.abs(chunk.z - playerChunk.z)
+                );
+                if (distance > renderDistance + 1) {
+                    chunksToUnload.push({ x: chunk.x, z: chunk.z });
+                }
+            });
+
+            chunksToUnload.forEach(chunk => {
+                unloadChunk(chunk.x, chunk.z);
+            });
+        }
+
+        // Seeded random number generator for consistent chunk generation
+        class SeededRandom {
+            constructor(seed) {
+                this.seed = seed;
+            }
+
+            random() {
+                this.seed = (this.seed * 9301 + 49297) % 233280;
+                return this.seed / 233280;
             }
         }
 
@@ -589,18 +710,37 @@
             
             addChatMessage(`You mined ${properties.resource}! +${expGain} Mining XP`, "system");
             
-            // Remove or respawn object
+            // Remove from scene and objects
             scene.remove(obj);
             delete gameObjects[obj.userData.id];
+
+            // Remove from chunk
+            chunks.forEach(chunk => {
+                const index = chunk.objects.indexOf(obj);
+                if (index > -1) {
+                    chunk.objects.splice(index, 1);
+                }
+            });
             
-            // Respawn after delay
+            // Respawn after delay in same general area
             setTimeout(() => {
-                addGameObject('rock', 
-                    Math.random() * 40 - 20, 
+                const chunkCoords = getChunkCoords(obj.position.x, obj.position.z);
+                const chunkStartX = chunkCoords.x * chunkSize - chunkSize / 2;
+                const chunkStartZ = chunkCoords.z * chunkSize - chunkSize / 2;
+                
+                const newObj = addGameObject('rock', 
+                    chunkStartX + Math.random() * chunkSize,
                     0, 
-                    Math.random() * 40 - 20,
+                    chunkStartZ + Math.random() * chunkSize,
                     { type: 'mining', resource: 'copper_ore', amount: 1 }
                 );
+
+                // Add to appropriate chunk
+                const chunkKey = getChunkKey(chunkCoords.x, chunkCoords.z);
+                const chunk = chunks.get(chunkKey);
+                if (chunk) {
+                    chunk.objects.push(newObj);
+                }
             }, 5000);
             
             updateUI();
@@ -625,18 +765,37 @@
             
             addChatMessage(`You defeated the goblin! +${expGain} Combat XP`, "system");
             
-            // Remove goblin
+            // Remove from scene and objects
             scene.remove(obj);
             delete gameObjects[obj.userData.id];
+
+            // Remove from chunk
+            chunks.forEach(chunk => {
+                const index = chunk.objects.indexOf(obj);
+                if (index > -1) {
+                    chunk.objects.splice(index, 1);
+                }
+            });
             
-            // Respawn after delay
+            // Respawn after delay in same general area
             setTimeout(() => {
-                addGameObject('goblin',
-                    Math.random() * 35 - 17.5,
+                const chunkCoords = getChunkCoords(obj.position.x, obj.position.z);
+                const chunkStartX = chunkCoords.x * chunkSize - chunkSize / 2;
+                const chunkStartZ = chunkCoords.z * chunkSize - chunkSize / 2;
+                
+                const newObj = addGameObject('goblin',
+                    chunkStartX + Math.random() * chunkSize,
                     0,
-                    Math.random() * 35 - 17.5,
+                    chunkStartZ + Math.random() * chunkSize,
                     { type: 'combat', health: 10, exp: 25 }
                 );
+
+                // Add to appropriate chunk
+                const chunkKey = getChunkKey(chunkCoords.x, chunkCoords.z);
+                const chunk = chunks.get(chunkKey);
+                if (chunk) {
+                    chunk.objects.push(newObj);
+                }
             }, 10000);
             
             updateUI();
@@ -880,6 +1039,7 @@
         function gameLoop() {
             if (!isLoading) {
                 handleMovement();
+                updateChunks(); // Add chunk updating to game loop
                 renderer.render(scene, camera);
             }
             requestAnimationFrame(gameLoop);
@@ -897,4 +1057,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
