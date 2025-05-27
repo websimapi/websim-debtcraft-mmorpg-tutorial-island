@@ -1011,13 +1011,15 @@
         // Render other players
         room.subscribePresence((presence) => {
             Object.keys(presence).forEach(clientId => {
-                if (clientId !== room.clientId) {
+                if (clientId !== room.clientId && presence[clientId]) {
                     renderOtherPlayer(clientId, presence[clientId]);
                 }
             });
         });
 
         function renderOtherPlayer(clientId, playerData) {
+            if (!playerData) return;
+            
             let otherPlayer = scene.getObjectByName(`player_${clientId}`);
             
             if (!otherPlayer && playerData.x !== undefined) {
