@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DebtCraft MMORPG - Tutorial Island</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Courier New', monospace;
+            color: white;
+        }
+        
+        #gameCanvas {
+            display: block;
+            cursor: grab;
+        }
+        
+        #gameCanvas:active {
+            cursor: grabbing;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        .ui-panel {
+            position: absolute;
+            background: rgba(0, 20, 40, 0.9);
+            border: 2px solid #4a9eff;
+            border-radius: 8px;
+            padding: 10px;
+            pointer-events: auto;
+            box-shadow: 0 0 20px rgba(74, 158, 255, 0.3);
+        }
+        
+        #statsPanel {
+            top: 10px;
+            left: 10px;
+            min-width: 200px;
+        }
+        
+        #inventoryPanel {
+            top: 10px;
+            right: 10px;
+            width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        #chatPanel {
+            bottom: 10px;
+            left: 10px;
+            width: 400px;
+            height: 150px;
+        }
+        
+        #questPanel {
+            top: 200px;
+            left: 10px;
+            width: 250px;
+        }
+        
+        .skill-bar {
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            height: 20px;
+        }
+        
+        .skill-progress {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ffaa44);
+            transition: width 0.3s ease;
+        }
+        
+        .negative {
+            color: #ff4444;
+        }
+        
+        .positive {
+            color: #44ff44;
+        }
+        
+        .item-slot {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 1px solid #666;
+            margin: 2px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            text-align: center;
+            line-height: 40px;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .item-slot:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .item-count {
+            position: absolute;
+            bottom: 0;
+            right: 2px;
+            font-size: 10px;
+            color: #ffff44;
+        }
+        
+        #chatInput {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #4a9eff;
+            color: white;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        
+        #chatMessages {
+            height: 120px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .chat-message {
+            margin: 2px 0;
+        }
+        
+        .system-message {
+            color: #ffaa44;
+            font-style: italic;
+        }
+        
+        .player-message {
+            color: #44aaff;
+        }
+        
+        .action-button {
+            background: #4a9eff;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 2px;
+            font-family: inherit;
+        }
+        
+        .action-button:hover {
+            background: #6bb6ff;
+        }
+        
+        .action-button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        #loadingScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        
+        .loading-text {
+            color: #4a9eff;
+            font-size: 24px;
+            text-align: center;
+        }
+        
+        .controls-hint {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loadingScreen">
+        <div class="loading-text">
+            Loading DebtCraft MMORPG...<br>
+            <small>Generating Tutorial Island...</small>
+        </div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="ui">
+        <div id="statsPanel" class="ui-panel">
+            <h3>Character Stats</h3>
+            <div id="playerName">Loading...</div>
+            <div>Gold: <span id="goldAmount" class="negative">-50</span></div>
+            <div>Total Level: <span id="totalLevel" class="negative">-5</span></div>
+            
+            <h4>Skills</h4>
+            <div>Mining: <span id="miningLevel" class="negative">-2</span> (<span id="miningExp" class="negative">-100</span> exp)</div>
+            <div class="skill-bar"><div class="skill-progress" id="miningProgress"></div></div>
+            
+            <div>Combat: <span id="combatLevel" class="negative">-1</span> (<span id="combatExp" class="negative">-50</span> exp)</div>
+            <div class="skill-bar"><div class="skill-progress" id="combatProgress"></div></div>
+            
+            <div>Fishing: <span id="fishingLevel" class="negative">-2</span> (<span id="fishingExp" class="negative">-75</span> exp)</div>
+            <div class="skill-bar"><div class="skill-progress" id="fishingProgress"></div></div>
+        </div>
+        
+        <div id="inventoryPanel" class="ui-panel">
+            <h3>Inventory</h3>
+            <div id="inventoryGrid"></div>
+            <div style="margin-top: 10px;">
+                <button class="action-button" onclick="openShop()">Visit General Store</button>
+            </div>
+        </div>
+        
+        <div id="questPanel" class="ui-panel">
+            <h3>Tutorial Quest</h3>
+            <div id="questText">
+                Welcome to Tutorial Island! You're in debt and need to work your way out.
+                <br><br>
+                <strong>Current Objective:</strong><br>
+                <span id="currentObjective">Find and mine some copper ore to start paying off your mining debt.</span>
+            </div>
+            <div style="margin-top: 10px;">
+                <button class="action-button" id="interactButton" onclick="performAction()" disabled>Interact</button>
+            </div>
+        </div>
+        
+        <div id="chatPanel" class="ui-panel">
+            <div id="chatMessages"></div>
+            <input type="text" id="chatInput" placeholder="Type to chat..." maxlength="200">
+        </div>
+        
+        <div class="controls-hint">
+            WASD - Move | Mouse - Look | Click - Interact<br>
+            Mine rocks, fight creatures, fish in water!
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        // Game initialization
+        const room = new WebsimSocket();
+        let scene, camera, renderer, player;
+        let gameAssets = {};
+        let playerStats = {
+            gold: -50,
+            mining: { level: -2, exp: -100 },
+            combat: { level: -1, exp: -50 },
+            fishing: { level: -2, exp: -75 }
+        };
+        let inventory = {};
+        let currentTarget = null;
+        let gameObjects = {};
+        let isLoading = true;
+
+        // Initialize game
+        async function init() {
+            await room.initialize();
+            await loadOrGenerateAssets();
+            setupScene();
+            setupPlayer();
+            setupEventListeners();
+            populateWorld();
+            updateUI();
+            gameLoop();
+            
+            document.getElementById('loadingScreen').style.display = 'none';
+            isLoading = false;
+            
+            addChatMessage("Welcome to DebtCraft! Work your way out of debt by gathering resources.", "system");
+        }
+
+        // Asset management
+        async function loadOrGenerateAssets() {
+            addChatMessage("Generating game assets...", "system");
+            
+            // Check if assets exist in database
+            const existingAssets = room.collection('game_asset').getList();
+            
+            if (existingAssets.length === 0) {
+                // Generate new assets
+                await generateGameAssets();
+            } else {
+                // Load existing assets
+                for (const asset of existingAssets) {
+                    gameAssets[asset.name] = asset.url;
+                }
+            }
+        }
+
+        async function generateGameAssets() {
+            const assetsToGenerate = [
+                { name: 'player', prompt: 'A simple 2D paper mario style character, adventurer with basic clothes, front facing view', transparent: true },
+                { name: 'copper_ore', prompt: 'A chunk of copper ore, brown-orange metallic rock, 2D paper mario style', transparent: true },
+                { name: 'iron_ore', prompt: 'A chunk of iron ore, grey metallic rock, 2D paper mario style', transparent: true },
+                { name: 'fish', prompt: 'A simple fish, silver colored, 2D paper mario style', transparent: true },
+                { name: 'goblin', prompt: 'A small green goblin enemy, 2D paper mario style, menacing but cute', transparent: true },
+                { name: 'tree', prompt: 'A simple tree with brown trunk and green leaves, 2D paper mario style', transparent: true },
+                { name: 'rock', prompt: 'A grey mining rock with visible ore veins, 2D paper mario style', transparent: true },
+                { name: 'water', prompt: 'Blue water surface with gentle ripples, 2D paper mario style', transparent: false }
+            ];
+
+            for (const asset of assetsToGenerate) {
+                try {
+                    const result = await websim.imageGen({
+                        prompt: asset.prompt,
+                        transparent: asset.transparent,
+                        aspect_ratio: "1:1"
+                    });
+                    
+                    gameAssets[asset.name] = result.url;
+                    
+                    // Store in database
+                    await room.collection('game_asset').create({
+                        name: asset.name,
+                        url: result.url,
+                        prompt: asset.prompt
+                    });
+                } catch (error) {
+                    console.error(`Failed to generate ${asset.name}:`, error);
+                }
+            }
+        }
+
+        // Three.js scene setup
+        function setupScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 10);
+            
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas') });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 10, 5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+            
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(100, 100);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+        }
+
+        function setupPlayer() {
+            // Create player sprite
+            const playerTexture = new THREE.TextureLoader().load(gameAssets.player || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+            const playerMaterial = new THREE.SpriteMaterial({ map: playerTexture });
+            player = new THREE.Sprite(playerMaterial);
+            player.scale.set(2, 2, 1);
+            player.position.set(0, 1, 0);
+            scene.add(player);
+            
+            // Update presence
+            room.updatePresence({
+                x: player.position.x,
+                y: player.position.y,
+                z: player.position.z,
+                stats: playerStats,
+                inventory: inventory
+            });
+        }
+
+        function populateWorld() {
+            // Add mining rocks
+            for (let i = 0; i < 10; i++) {
+                addGameObject('rock', 
+                    Math.random() * 40 - 20, 
+                    0, 
+                    Math.random() * 40 - 20,
+                    { type: 'mining', resource: 'copper_ore', amount: 1 }
+                );
+            }
+            
+            // Add trees
+            for (let i = 0; i < 15; i++) {
+                addGameObject('tree',
+                    Math.random() * 50 - 25,
+                    0,
+                    Math.random() * 50 - 25,
+                    { type: 'decoration' }
+                );
+            }
+            
+            // Add fishing spots
+            for (let i = 0; i < 5; i++) {
+                addGameObject('water',
+                    Math.random() * 30 - 15,
+                    0,
+                    Math.random() * 30 - 15,
+                    { type: 'fishing', resource: 'fish', amount: 1 }
+                );
+            }
+            
+            // Add some goblins
+            for (let i = 0; i < 8; i++) {
+                addGameObject('goblin',
+                    Math.random() * 35 - 17.5,
+                    0,
+                    Math.random() * 35 - 17.5,
+                    { type: 'combat', health: 10, exp: 25 }
+                );
+            }
+        }
+
+        function addGameObject(type, x, y, z, properties = {}) {
+            const texture = new THREE.TextureLoader().load(gameAssets[type] || gameAssets.player);
+            const material = new THREE.SpriteMaterial({ map: texture });
+            const sprite = new THREE.Sprite(material);
+            
+            sprite.scale.set(2, 2, 1);
+            sprite.position.set(x, y + 1, z);
+            sprite.userData = { type, properties, id: Math.random().toString(36) };
+            
+            scene.add(sprite);
+            gameObjects[sprite.userData.id] = sprite;
+            
+            return sprite;
+        }
+
+        // Player movement and controls
+        const keys = {};
+        let mouseX = 0, mouseY = 0;
+        let isMouseDown = false;
+
+        function setupEventListeners() {
+            // Keyboard controls
+            document.addEventListener('keydown', (e) => {
+                keys[e.code] = true;
+            });
+            
+            document.addEventListener('keyup', (e) => {
+                keys[e.code] = false;
+            });
+            
+            // Mouse controls
+            const canvas = document.getElementById('gameCanvas');
+            canvas.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                canvas.style.cursor = 'grabbing';
+            });
+            
+            canvas.addEventListener('mouseup', (e) => {
+                isMouseDown = false;
+                canvas.style.cursor = 'grab';
+            });
+            
+            canvas.addEventListener('mousemove', (e) => {
+                if (isMouseDown) {
+                    mouseX = e.clientX;
+                    mouseY = e.clientY;
+                    
+                    // Rotate camera around player
+                    const deltaX = (e.movementX || 0) * 0.01;
+                    const deltaY = (e.movementY || 0) * 0.01;
+                    
+                    camera.position.x = player.position.x + Math.sin(deltaX * 10) * 10;
+                    camera.position.z = player.position.z + Math.cos(deltaX * 10) * 10;
+                    camera.lookAt(player.position);
+                }
+            });
+            
+            // Click to interact
+            canvas.addEventListener('click', (e) => {
+                if (!isMouseDown) {
+                    checkInteraction();
+                }
+            });
+            
+            // Chat input
+            const chatInput = document.getElementById('chatInput');
+            chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    sendChatMessage();
+                }
+            });
+            
+            // Window resize
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function handleMovement() {
+            const moveSpeed = 0.1;
+            
+            if (keys['KeyW']) {
+                player.position.z -= moveSpeed;
+            }
+            if (keys['KeyS']) {
+                player.position.z += moveSpeed;
+            }
+            if (keys['KeyA']) {
+                player.position.x -= moveSpeed;
+            }
+            if (keys['KeyD']) {
+                player.position.x += moveSpeed;
+            }
+            
+            // Update camera to follow player
+            camera.position.x = player.position.x + 5;
+            camera.position.z = player.position.z + 10;
+            camera.lookAt(player.position);
+            
+            // Update presence
+            room.updatePresence({
+                x: player.position.x,
+                y: player.position.y,
+                z: player.position.z,
+                stats: playerStats,
+                inventory: inventory
+            });
+        }
+
+        function checkInteraction() {
+            let nearestObject = null;
+            let nearestDistance = Infinity;
+            
+            Object.values(gameObjects).forEach(obj => {
+                const distance = player.position.distanceTo(obj.position);
+                if (distance < 3 && distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearestObject = obj;
+                }
+            });
+            
+            if (nearestObject) {
+                interactWithObject(nearestObject);
+            }
+        }
+
+        function interactWithObject(obj) {
+            const { type, properties } = obj.userData;
+            
+            switch (properties.type) {
+                case 'mining':
+                    performMining(obj, properties);
+                    break;
+                case 'fishing':
+                    performFishing(obj, properties);
+                    break;
+                case 'combat':
+                    performCombat(obj, properties);
+                    break;
+            }
+        }
+
+        function performMining(obj, properties) {
+            const expGain = 10;
+            playerStats.mining.exp += expGain;
+            
+            // Add resource to inventory
+            addToInventory(properties.resource, properties.amount);
+            
+            addChatMessage(`You mined ${properties.resource}! +${expGain} Mining XP`, "system");
+            
+            // Remove or respawn object
+            scene.remove(obj);
+            delete gameObjects[obj.userData.id];
+            
+            // Respawn after delay
+            setTimeout(() => {
+                addGameObject('rock', 
+                    Math.random() * 40 - 20, 
+                    0, 
+                    Math.random() * 40 - 20,
+                    { type: 'mining', resource: 'copper_ore', amount: 1 }
+                );
+            }, 5000);
+            
+            updateUI();
+            checkLevelUp('mining');
+        }
+
+        function performFishing(obj, properties) {
+            const expGain = 15;
+            playerStats.fishing.exp += expGain;
+            
+            addToInventory(properties.resource, properties.amount);
+            
+            addChatMessage(`You caught a fish! +${expGain} Fishing XP`, "system");
+            
+            updateUI();
+            checkLevelUp('fishing');
+        }
+
+        function performCombat(obj, properties) {
+            const expGain = properties.exp;
+            playerStats.combat.exp += expGain;
+            
+            addChatMessage(`You defeated the goblin! +${expGain} Combat XP`, "system");
+            
+            // Remove goblin
+            scene.remove(obj);
+            delete gameObjects[obj.userData.id];
+            
+            // Respawn after delay
+            setTimeout(() => {
+                addGameObject('goblin',
+                    Math.random() * 35 - 17.5,
+                    0,
+                    Math.random() * 35 - 17.5,
+                    { type: 'combat', health: 10, exp: 25 }
+                );
+            }, 10000);
+            
+            updateUI();
+            checkLevelUp('combat');
+        }
+
+        function addToInventory(item, amount) {
+            if (!inventory[item]) {
+                inventory[item] = 0;
+            }
+            inventory[item] += amount;
+        }
+
+        function checkLevelUp(skill) {
+            const currentLevel = playerStats[skill].level;
+            const currentExp = playerStats[skill].exp;
+            const expNeeded = Math.max(0, (Math.abs(currentLevel) + 1) * 100);
+            
+            if (currentExp >= expNeeded && currentLevel < 0) {
+                playerStats[skill].level++;
+                addChatMessage(`${skill.toUpperCase()} LEVEL UP! Now level ${playerStats[skill].level}`, "system");
+                
+                if (playerStats[skill].level === 0) {
+                    addChatMessage(`You've paid off your ${skill} debt! You can now gain positive levels.`, "system");
+                }
+            }
+        }
+
+        // UI Management
+        function updateUI() {
+            // Update player name
+            if (room.peers[room.clientId]) {
+                document.getElementById('playerName').textContent = room.peers[room.clientId].username;
+            }
+            
+            // Update stats
+            document.getElementById('goldAmount').textContent = playerStats.gold;
+            document.getElementById('goldAmount').className = playerStats.gold < 0 ? 'negative' : 'positive';
+            
+            const totalLevel = playerStats.mining.level + playerStats.combat.level + playerStats.fishing.level;
+            document.getElementById('totalLevel').textContent = totalLevel;
+            document.getElementById('totalLevel').className = totalLevel < 0 ? 'negative' : 'positive';
+            
+            // Update skills
+            updateSkillDisplay('mining');
+            updateSkillDisplay('combat');
+            updateSkillDisplay('fishing');
+            
+            // Update inventory
+            updateInventoryDisplay();
+            
+            // Update quest
+            updateQuestDisplay();
+        }
+
+        function updateSkillDisplay(skill) {
+            const stats = playerStats[skill];
+            document.getElementById(`${skill}Level`).textContent = stats.level;
+            document.getElementById(`${skill}Level`).className = stats.level < 0 ? 'negative' : 'positive';
+            
+            document.getElementById(`${skill}Exp`).textContent = stats.exp;
+            document.getElementById(`${skill}Exp`).className = stats.exp < 0 ? 'negative' : 'positive';
+            
+            // Calculate progress bar
+            const expNeeded = Math.max(100, Math.abs(stats.level + 1) * 100);
+            const progress = Math.max(0, (stats.exp + expNeeded) / expNeeded * 100);
+            document.getElementById(`${skill}Progress`).style.width = `${Math.min(100, progress)}%`;
+        }
+
+        function updateInventoryDisplay() {
+            const grid = document.getElementById('inventoryGrid');
+            grid.innerHTML = '';
+            
+            // Create 20 slots
+            for (let i = 0; i < 20; i++) {
+                const slot = document.createElement('div');
+                slot.className = 'item-slot';
+                
+                const items = Object.keys(inventory);
+                if (i < items.length) {
+                    const item = items[i];
+                    const count = inventory[item];
+                    slot.textContent = item.split('_')[0].charAt(0).toUpperCase();
+                    
+                    const countSpan = document.createElement('span');
+                    countSpan.className = 'item-count';
+                    countSpan.textContent = count;
+                    slot.appendChild(countSpan);
+                    
+                    slot.title = `${item}: ${count}`;
+                    slot.onclick = () => selectItem(item);
+                }
+                
+                grid.appendChild(slot);
+            }
+        }
+
+        function updateQuestDisplay() {
+            const hasItems = Object.keys(inventory).length > 0;
+            const hasPositiveLevel = Object.values(playerStats).some(skill => skill.level >= 0);
+            
+            let objective = "Find and mine some copper ore to start paying off your mining debt.";
+            
+            if (hasItems && !hasPositiveLevel) {
+                objective = "Great! Now sell your items at the General Store to pay off your debts and continue leveling up skills.";
+            } else if (hasPositiveLevel) {
+                objective = "Excellent! You're out of debt in at least one skill. Continue practicing all skills to become a master adventurer!";
+            }
+            
+            document.getElementById('currentObjective').textContent = objective;
+        }
+
+        // Chat system
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            
+            if (message) {
+                room.send({
+                    type: 'chat',
+                    message: message,
+                    username: room.peers[room.clientId]?.username || 'Anonymous'
+                });
+                input.value = '';
+            }
+        }
+
+        function addChatMessage(message, type = 'player', username = '') {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageElement = document.createElement('div');
+            messageElement.className = `chat-message ${type}-message`;
+            
+            if (type === 'player' && username) {
+                messageElement.innerHTML = `<strong>${username}:</strong> ${message}`;
+            } else {
+                messageElement.textContent = message;
+            }
+            
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Shop system
+        function openShop() {
+            const shopItems = [
+                { name: 'copper_ore', sellPrice: 5 },
+                { name: 'iron_ore', sellPrice: 10 },
+                { name: 'fish', sellPrice: 8 }
+            ];
+            
+            let shopHTML = '<h3>General Store</h3><p>Sell your items here:</p>';
+            
+            Object.keys(inventory).forEach(item => {
+                const count = inventory[item];
+                const shopItem = shopItems.find(si => si.name === item);
+                const price = shopItem ? shopItem.sellPrice : 1;
+                
+                shopHTML += `<div style="margin: 5px 0;">
+                    ${item} (${count}) - ${price} gold each
+                    <button class="action-button" onclick="sellItem('${item}', ${price})">Sell All</button>
+                </div>`;
+            });
+            
+            // Create shop modal
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                background: rgba(0, 20, 40, 0.95); border: 2px solid #4a9eff;
+                border-radius: 8px; padding: 20px; z-index: 1000; max-width: 400px;
+            `;
+            modal.innerHTML = shopHTML + '<button class="action-button" onclick="closeShop()">Close</button>';
+            
+            document.body.appendChild(modal);
+            window.currentShopModal = modal;
+        }
+
+        function sellItem(item, price) {
+            const count = inventory[item] || 0;
+            const totalValue = count * price;
+            
+            playerStats.gold += totalValue;
+            delete inventory[item];
+            
+            addChatMessage(`Sold ${count} ${item} for ${totalValue} gold!`, "system");
+            updateUI();
+            closeShop();
+        }
+
+        function closeShop() {
+            if (window.currentShopModal) {
+                document.body.removeChild(window.currentShopModal);
+                window.currentShopModal = null;
+            }
+        }
+
+        // Multiplayer event handling
+        room.onmessage = (event) => {
+            const data = event.data;
+            
+            switch (data.type) {
+                case 'chat':
+                    addChatMessage(data.message, 'player', data.username);
+                    break;
+                case 'connected':
+                    addChatMessage(`${data.username} joined the game!`, 'system');
+                    break;
+                case 'disconnected':
+                    addChatMessage(`${data.username} left the game.`, 'system');
+                    break;
+            }
+        };
+
+        // Render other players
+        room.subscribePresence((presence) => {
+            Object.keys(presence).forEach(clientId => {
+                if (clientId !== room.clientId) {
+                    renderOtherPlayer(clientId, presence[clientId]);
+                }
+            });
+        });
+
+        function renderOtherPlayer(clientId, playerData) {
+            let otherPlayer = scene.getObjectByName(`player_${clientId}`);
+            
+            if (!otherPlayer && playerData.x !== undefined) {
+                // Create new player sprite
+                const texture = new THREE.TextureLoader().load(gameAssets.player);
+                const material = new THREE.SpriteMaterial({ map: texture });
+                otherPlayer = new THREE.Sprite(material);
+                otherPlayer.scale.set(2, 2, 1);
+                otherPlayer.name = `player_${clientId}`;
+                scene.add(otherPlayer);
+            }
+            
+            if (otherPlayer && playerData.x !== undefined) {
+                otherPlayer.position.set(playerData.x, playerData.y, playerData.z);
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            if (!isLoading) {
+                handleMovement();
+                renderer.render(scene, camera);
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Make functions global for onclick handlers
+        window.openShop = openShop;
+        window.closeShop = closeShop;
+        window.sellItem = sellItem;
+        window.performAction = checkInteraction;
+
+        // Start the game
+        init().catch(console.error);
+    </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
